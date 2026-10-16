@@ -1,1 +1,438 @@
+name: Build MayaJaal APK
 
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mayajaal-apk-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.19.6"
+          channel: stable
+          cache: true
+
+      - name: Verify required files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f android/app/google-services.json || {
+            echo "::error::android/app/google-services.json not found"
+            exit 1
+          }
+
+          test -f assets/icon/logo.png || {
+            echo "::error::assets/icon/logo.png not found"
+            exit 1
+          }
+
+      - name: Generate Keystore on the fly
+        shell: bash
+        run: |
+          keytool -genkeypair -v \
+            -keystore mayajaal-release.jks \
+            -alias newkey2024 \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass MayajaalRelease2024 \
+            -keypass MayajaalRelease2024 \
+            -dname "CN=MayaJaal, OU=Dev, O=MayaJaal, L=Delhi, S=Delhi, C=IN" \
+            -noprompt
+
+      - name: Write pubspec.yaml
+        shell: bash
+        run: |
+          cat > pubspec.yaml <<'EOF'
+          name: mayajaal
+          description: Mayajaal App
+          publish_to: 'none'
+          version: 1.1.2+${{ github.run_number }}
+
+          environment:
+            sdk: '>=3.0.0 <4.0.0'
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            cupertino_icons: ^1.0.6
+            app_links: ^6.3.2
+            webview_flutter: ^4.7.0
+            google_sign_in: ^6.2.1
+            shared_preferences: ^2.2.2
+            url_launcher: ^6.2.2
+            video_player: ^2.8.2
+            chewie: ^1.8.1
+            http: ^1.2.1
+            share_plus: ^9.0.0
+            onesignal_flutter: ^5.2.0
+            firebase_core: ^3.0.0
+            firebase_auth: ^5.0.0
+            firebase_database: ^11.0.0
+            device_info_plus: ^10.1.2
+            path_provider: ^2.1.4
+            permission_handler: ^11.3.1
+            photo_manager: ^3.6.4
+            photo_manager_image_provider: ^2.1.1
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^3.0.0
+            flutter_launcher_icons: ^0.13.1
+
+          flutter_launcher_icons:
+            android: true
+            ios: false
+            image_path: "assets/icon/logo.png"
+            adaptive_icon_background: "#6A1B9A"
+            adaptive_icon_foreground: "assets/icon/logo.png"
+
+          flutter:
+            uses-material-design: true
+            assets:
+              - assets/icon/
+          EOF
+
+      - name: Prepare Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p android/app/src/main/kotlin/com/mayajaal/online
+          mkdir -p android/app/src/main/res/values
+          mkdir -p android/app/src/main/res/values-night
+
+          cp mayajaal-release.jks android/app/mayajaal-release.jks
+
+          cat > android/app/src/main/kotlin/com/mayajaal/online/MainActivity.kt <<'EOF'
+          package com.mayajaal.online
+
+          import io.flutter.embedding.android.FlutterActivity
+
+          class MainActivity : FlutterActivity()
+          EOF
+
+          cat > android/app/src/main/res/values/styles.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+                  <item name="android:windowBackground">@android:color/white</item>
+              </style>
+              <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+                  <item name="android:windowBackground">?android:colorBackground</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > android/app/src/main/res/values-night/styles.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+                  <item name="android:windowBackground">@android:color/black</item>
+              </style>
+              <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+                  <item name="android:windowBackground">?android:colorBackground</item>
+              </style>
+          </resources>
+          EOF
+
+      - name: Create AndroidManifest.xml
+        shell: bash
+        run: |
+          cat > android/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+              <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+              <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+              <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"/>
+              <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION"/>
+              <uses-permission android:name="android.permission.CAMERA"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+              <application
+                  android:label="MayaJaal"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher"
+                  android:hardwareAccelerated="true"
+                  android:requestLegacyExternalStorage="true"
+                  android:usesCleartextTraffic="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:supportsPictureInPicture="true"
+                      android:resizeableActivity="true"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme"/>
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+
+                      <intent-filter android:autoVerify="true">
+                          <action android:name="android.intent.action.VIEW"/>
+                          <category android:name="android.intent.category.DEFAULT"/>
+                          <category android:name="android.intent.category.BROWSABLE"/>
+
+                          <data android:scheme="https" android:host="mayajaal.online" android:pathPrefix="/v/"/>
+                          <data android:scheme="https" android:host="mayajaal.online" android:pathPrefix="/stream/"/>
+                          <data android:scheme="https" android:host="mayajaal.online" android:pathPrefix="/api/v/"/>
+                          <data android:scheme="https" android:host="mayajaal.online" android:pathPrefix="/tb/"/>
+                          <data android:scheme="https" android:host="mayajaal.online" android:pathPrefix="/s/"/>
+
+                          <data android:scheme="https" android:host="www.mayajaal.online" android:pathPrefix="/v/"/>
+                          <data android:scheme="https" android:host="www.mayajaal.online" android:pathPrefix="/stream/"/>
+                          <data android:scheme="https" android:host="www.mayajaal.online" android:pathPrefix="/api/v/"/>
+                          <data android:scheme="https" android:host="www.mayajaal.online" android:pathPrefix="/tb/"/>
+                          <data android:scheme="https" android:host="www.mayajaal.online" android:pathPrefix="/s/"/>
+
+                          <data android:scheme="https" android:host="m.mayajaal.online"/>
+                      </intent-filter>
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW"/>
+                          <category android:name="android.intent.category.DEFAULT"/>
+                          <category android:name="android.intent.category.BROWSABLE"/>
+                          <data android:scheme="mayajaall"/>
+                      </intent-filter>
+
+                  </activity>
+
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2"/>
+
+              </application>
+          </manifest>
+          EOF
+
+      - name: Create app build.gradle
+        shell: bash
+        run: |
+          cat > android/app/build.gradle <<'EOF'
+          def localProperties = new Properties()
+          def localPropertiesFile = rootProject.file('local.properties')
+
+          if (localPropertiesFile.exists()) {
+              localPropertiesFile.withReader('UTF-8') { reader ->
+                  localProperties.load(reader)
+              }
+          }
+
+          def flutterRoot = localProperties.getProperty('flutter.sdk')
+          if (flutterRoot == null) {
+              throw new GradleException("Flutter SDK not found.")
+          }
+
+          apply plugin: 'com.android.application'
+          apply plugin: 'kotlin-android'
+          apply plugin: 'com.google.gms.google-services'
+          apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
+
+          android {
+              namespace 'com.mayajaal.online'
+              compileSdkVersion 35
+              ndkVersion flutter.ndkVersion
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+
+              sourceSets {
+                  main.java.srcDirs += 'src/main/kotlin'
+              }
+
+              defaultConfig {
+                  applicationId "com.mayajaal.online"
+                  minSdkVersion 23
+                  targetSdkVersion 35
+                  versionCode ${{ github.run_number }}
+                  versionName "1.1.2"
+                  multiDexEnabled true
+              }
+
+              signingConfigs {
+                  release {
+                      storeFile file('mayajaal-release.jks')
+                      storePassword 'MayajaalRelease2024'
+                      keyAlias 'newkey2024'
+                      keyPassword 'MayajaalRelease2024'
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                      minifyEnabled false
+                      shrinkResources false
+                  }
+              }
+          }
+
+          flutter {
+              source '../..'
+          }
+          EOF
+
+      - name: Create root build.gradle
+        shell: bash
+        run: |
+          cat > android/build.gradle <<'EOF'
+          buildscript {
+              ext.kotlin_version = '1.9.24'
+
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.1.4'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+                  classpath 'com.google.gms:google-services:4.4.0'
+              }
+          }
+
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.buildDir = '../build'
+
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+
+          subprojects {
+              project.evaluationDependsOn(':app')
+          }
+
+          tasks.register("clean", Delete) {
+              delete rootProject.buildDir
+          }
+          EOF
+
+      - name: Create gradle.properties
+        shell: bash
+        run: |
+          cat > android/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048M
+          android.useAndroidX=true
+          android.enableJetifier=true
+          android.enableR8.fullMode=false
+          EOF
+
+      - name: Create settings.gradle
+        shell: bash
+        run: |
+          cat > android/settings.gradle <<'EOF'
+          include ':app'
+
+          def localPropertiesFile = new File(rootProject.projectDir, "local.properties")
+          def properties = new Properties()
+
+          assert localPropertiesFile.exists()
+          localPropertiesFile.withReader("UTF-8") { reader ->
+              properties.load(reader)
+          }
+
+          def flutterSdkPath = properties.getProperty("flutter.sdk")
+          assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
+
+          apply from: "$flutterSdkPath/packages/flutter_tools/gradle/app_plugin_loader.gradle"
+          EOF
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Generate launcher icons
+        run: dart run flutter_launcher_icons
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Verify and rename APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "::error::APK build output was not found"
+            exit 1
+          fi
+
+          mkdir -p release-apk
+          cp "$APK" release-apk/MayaJaal.apk
+          ls -lh release-apk/MayaJaal.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MayaJaal-APK
+          path: release-apk/MayaJaal.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.1.2-${{ github.run_number }}
+          name: MayaJaal Release v1.1.2 Build ${{ github.run_number }}
+          repository: MayaJaal1/MayaJaal-Downloads
+          token: ${{ secrets.PAT_TOKEN }}
+          body: |
+            MayaJaal Android APK.
+            Version: 1.1.2
+            Version Code: ${{ github.run_number }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: release-apk/MayaJaal.apk
+          fail_on_unmatched_files: true
